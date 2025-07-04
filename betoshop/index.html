@@ -1,1 +1,155 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>BétoShop - Editeur Offline</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { margin:0; font-family:sans-serif; background:#222; color:#eee;}
+    header { background:#2d89ef; color:#fff; padding:1em 2em; display:flex; align-items:center; gap:2em;}
+    button { background:#fff; color:#2d89ef; border:none; border-radius:4px; padding:0.4em 1em; font-weight:bold; cursor:pointer;}
+    main { display:flex; height:85vh;}
+    #layersPanel, #toolsPanel { width:180px; background:#181818; padding:1em; overflow:auto;}
+    #editorArea { flex:1; display:flex; justify-content:center; align-items:center; background:#111;}
+    canvas { border:2px solid #2d89ef; background:#fff; box-shadow:0 0 10px #000a;}
+    #status { margin-left: 2em; font-size: 1em; }
+    h1 { font-size: 1.4em; margin:0; }
+    #layersPanel h2 { font-size:1em; margin-top:0; }
+    #layersPanel div { margin-bottom: 0.6em; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>BétoShop <span style="font-size:0.6em;">(Offline PWA)</span></h1>
+    <button id="exportBtn">Exporter</button>
+    <button id="importBtn">Importer</button>
+    <input type="file" id="importFile" style="display:none;">
+    <span id="status"></span>
+  </header>
+  <main>
+    <aside id="layersPanel"></aside>
+    <section id="editorArea">
+      <canvas id="mainCanvas" width="800" height="600"></canvas>
+    </section>
+    <aside id="toolsPanel"></aside>
+  </main>
+  <script>
+  // ========== State & Persistence ==========
+  const BetoShopState = {
+    save: function(projectData) {
+      try { localStorage.setItem("betoshop_project", JSON.stringify(projectData)); }
+      catch(e) { alert("Erreur de sauvegarde locale !"); }
+    },
+    load: function() {
+      const saved = localStorage.getItem("betoshop_project");
+      return saved ? JSON.parse(saved) : null;
+    }
+  };
 
+  // ========== Layers Management ==========
+  const BetoShopLayers = (function(){
+    let state = {
+      layers: [],
+      canvasSize: { width: 800, height: 600 },
+      backgroundColor: "#ffffff"
+    };
+    function initEmptyProject() {
+      state = { layers: [], canvasSize: { width:800, height:600 }, backgroundColor:"#ffffff"};
+      render();
+    }
+    function exportProject() { return JSON.parse(JSON.stringify(state)); }
+    function importProject(data) { state = data; render(); }
+    function addLayer(layer) { state.layers.push(layer); render(); }
+    function removeLayer(idx) { state.layers.splice(idx,1); render(); }
+    function render() {
+      const canvas = document.getElementById('mainCanvas');
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      ctx.fillStyle = state.backgroundColor;
+      ctx.fillRect(0,0,canvas.width,canvas.height);
+      for(const layer of state.layers) {
+        if(layer.type==="image") {
+          const img = new Image();
+          img.onload = () => ctx.drawImage(img,0,0);
+          img.src = layer.src;
+        } else if(layer.type==="drawing") {
+          ctx.strokeStyle = layer.color||"#000";
+          ctx.beginPath();
+          for(const [i,pt] of layer.path.entries()) {
+            if(i===0) ctx.moveTo(pt.x, pt.y);
+            else ctx.lineTo(pt.x, pt.y);
+          }
+          ctx.stroke();
+        } else if(layer.type==="text") {
+          ctx.font = `24px ${layer.font||"sans-serif"}`;
+          ctx.fillStyle = layer.color||"#000";
+          ctx.fillText(layer.value, layer.x, layer.y);
+        }
+      }
+      // Layers UI
+      const panel = document.getElementById('layersPanel');
+      if(panel) {
+        panel.innerHTML = "<h2>Calques</h2>" + state.layers.map((l,i)=>
+          `<div>(${i+1}) ${l.type} <button data-rm="${i}">❌</button></div>`
+        ).join("") +
+        `<button id="addTextLayer">+ Texte</button>`;
+        [...panel.querySelectorAll('button[data-rm]')].forEach(btn=>{
+          btn.onclick = ()=>removeLayer(Number(btn.dataset.rm));
+        });
+        panel.querySelector('#addTextLayer').onclick = ()=>{
+          addLayer({type:"text", value:"Nouveau texte", font:"sans-serif", color:"#2d89ef", x:100, y:100});
+        };
+      }
+    }
+    return {
+      initEmptyProject, exportProject, importProject, addLayer, removeLayer, render, get state(){return state;}
+    };
+  })();
+
+  // ========== Autosave ==========
+  setInterval(() => {
+    const currentData = BetoShopLayers.exportProject();
+    BetoShopState.save(currentData);
+    document.getElementById('status').textContent = "💾 Sauvegarde auto...";
+  }, 10000);
+
+  // ========== Main ==========
+  window.addEventListener('DOMContentLoaded', ()=>{
+    // Restaure ou vide
+    const lastSession = BetoShopState.load();
+    if(lastSession) {
+      BetoShopLayers.importProject(lastSession);
+      document.getElementById('status').textContent = "🟢 Dernière session restaurée !";
+    } else {
+      BetoShopLayers.initEmptyProject();
+    }
+    // Export
+    document.getElementById('exportBtn').onclick = ()=>{
+      const data = BetoShopLayers.exportProject();
+      const blob = new Blob([JSON.stringify(data)],{type:"application/json"});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = "betoshop_project.json"; a.click();
+      URL.revokeObjectURL(url);
+    };
+    // Import
+    document.getElementById('importBtn').onclick = ()=>{
+      document.getElementById('importFile').click();
+    };
+    document.getElementById('importFile').addEventListener('change', e=>{
+      const file = e.target.files[0]; if(!file) return;
+      const reader = new FileReader();
+      reader.onload = evt=>{
+        try {
+          const json = JSON.parse(evt.target.result);
+          BetoShopLayers.importProject(json);
+          BetoShopState.save(json);
+          document.getElementById('status').textContent = "✅ Projet importé !";
+        } catch { alert("Fichier invalide !"); }
+      };
+      reader.readAsText(file);
+    });
+  });
+  </script>
+</body>
+</html>
